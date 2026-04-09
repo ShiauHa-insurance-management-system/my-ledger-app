@@ -55,25 +55,26 @@ def save_data(df_to_save):
 tw_now = get_tw_time()
 df = load_data()
 
-# 財務統計計算
-current_month = tw_now.strftime("%Y-%m")
-df_for_calc = df.copy()
-df_for_calc['月'] = pd.to_datetime(df_for_calc['日期']).dt.strftime("%Y-%m")
-month_df = df_for_calc[df_for_calc['月'] == current_month]
+# --- 4. 數據預處理 (月份過濾) ---
+current_month_str = tw_now.strftime("%Y-%m")
+df_calc = df.copy()
+df_calc['日期格式'] = pd.to_datetime(df_calc['日期'])
+df_calc['月份'] = df_calc['日期格式'].dt.strftime("%Y-%m")
 
-income = month_df[month_df['收支'] == "收入"]['金額'].sum()
-expense = month_df[month_df['收支'] == "支出"]['金額'].sum()
-balance = income - expense
+# 本月資料
+month_df = df_calc[df_calc['月份'] == current_month_str]
+month_income = month_df[month_df['收支'] == "收入"]['金額'].sum()
+month_expense = month_df[month_df['收支'] == "支出"]['金額'].sum()
+month_balance = month_income - month_expense
 
-# --- 4. 介面呈現 ---
+# --- 5. 介面呈現 ---
 with st.sidebar:
     st.title("⚙️ 管理選單")
     if st.button("🔓 安全登出系統", type="primary"):
         st.session_state.auth = False
         st.rerun()
     st.divider()
-    # 修正後的金額顯示行
-    st.metric("本月結餘", f"${int(balance):,}", delta=f"{int(balance):+,}")
+    st.metric("本月結餘", f"${int(month_balance):,}", delta=f"{int(month_balance):+,}")
     st.info(f"📅 目前時間：{tw_now.strftime('%H:%M')}")
 
 tab1, tab2, tab3 = st.tabs(["➕ 新增帳目", "📊 財務分析", "📜 歷史編輯"])
@@ -101,37 +102,53 @@ with tab1:
                 st.success("✅ 已記錄！")
                 st.rerun()
 
-# --- Tab 2: 財務分析 (類別加總) ---
+# --- Tab 2: 財務分析 (更新重點區) ---
 with tab2:
-    st.subheader(f"📅 {current_month} 類別統計")
+    # 第一大區域：每月收支概況
+    st.markdown("### 📅 1. 每月收支概況")
+    st.caption(f"統計月份：{current_month_str}")
     c1, c2 = st.columns(2)
-    c1.metric("本月總收入", f"${int(income):,}")
-    c2.metric("本月總支出", f"${int(expense):,}")
+    c1.metric("本月總收入", f"${int(month_income):,}")
+    c2.metric("本月總支出", f"${int(month_expense):,}")
+    
+    # 本月收支對比圖
+    summary_data = pd.DataFrame({"項目": ["收入", "支出"], "金額": [month_income, month_expense]})
+    st.bar_chart(summary_data.set_index("項目"))
+    
     st.divider()
     
-    # 支出排行
-    exp_only = month_df[month_df['收支'] == "支出"]
-    if not exp_only.empty:
-        st.write("### 🔴 支出類別加總")
-        cat_sum = exp_only.groupby("類別")["金額"].sum().sort_values(ascending=False).reset_index()
-        for _, r in cat_sum.iterrows():
-            st.write(f"🔹 {r['類別']}: `${int(r['金額']):,}`")
-        st.bar_chart(cat_sum.set_index("類別"))
+    # 第二大區域：各類別總金額 (不分月份)
+    st.markdown("### 🏆 2. 各類別累計總額 (歷史總計)")
+    st.caption("此區域統計自開帳以來的所有類別加總，不限月份")
     
-    # 收入排行
-    inc_only = month_df[month_df['收支'] == "收入"]
-    if not inc_only.empty:
-        st.write("### 🟢 收入類別加總")
-        inc_sum = inc_only.groupby("類別")["金額"].sum().sort_values(ascending=False).reset_index()
-        for _, r in inc_sum.iterrows():
-            st.write(f"🔸 {r['類別']}: `${int(r['金額']):,}`")
-        st.bar_chart(inc_sum.set_index("類別"))
+    col_exp, col_inc = st.columns(2)
+    
+    with col_exp:
+        st.write("#### 🔴 累計支出排行")
+        all_exp = df[df['收支'] == "支出"]
+        if not all_exp.empty:
+            cat_exp_total = all_exp.groupby("類別")["金額"].sum().sort_values(ascending=False).reset_index()
+            for _, r in cat_exp_total.iterrows():
+                st.write(f"🔹 {r['類別']}: `${int(r['金額']):,}`")
+            st.bar_chart(cat_exp_total.set_index("類別"))
+        else:
+            st.info("尚無支出紀錄")
 
-# --- Tab 3: 歷史編輯 (關鍵字搜尋版) ---
+    with col_inc:
+        st.write("#### 🟢 累計收入排行")
+        all_inc = df[df['收支'] == "收入"]
+        if not all_inc.empty:
+            cat_inc_total = all_inc.groupby("類別")["金額"].sum().sort_values(ascending=False).reset_index()
+            for _, r in cat_inc_total.iterrows():
+                st.write(f"🔸 {r['類別']}: `${int(r['金額']):,}`")
+            st.bar_chart(cat_inc_total.set_index("類別"))
+        else:
+            st.info("尚無收入紀錄")
+
+# --- Tab 3: 歷史編輯 ---
 with tab3:
     st.subheader("📜 歷史紀錄維護")
     search_query = st.text_input("🔍 搜尋關鍵字 (類別或內容)", "").strip()
-    
     filtered_df = df.copy()
     if search_query:
         filtered_df = df[df['類別'].str.contains(search_query, case=False, na=False) | 
@@ -146,7 +163,6 @@ with tab3:
                 s = st.selectbox("收支", ["支出", "收入"], index=0 if row['收支']=="支出" else 1, key=f"s{i}")
                 a = st.number_input("金額", value=int(row['金額']), key=f"a{i}")
                 n = st.text_input("內容", row['項目內容'], key=f"n{i}")
-                
                 b1, b2 = st.columns(2)
                 if b1.form_submit_button("💾 儲存"):
                     df.loc[i] = [d, c, n, s, a]

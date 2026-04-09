@@ -3,7 +3,7 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta
 
-# --- 1. 系統設定與 CSS 強制顯色 ---
+# --- 1. 系統設定與介面顯色優化 ---
 st.set_page_config(page_title="產險行動記帳本", layout="wide")
 
 st.markdown("""
@@ -67,9 +67,91 @@ balance = income - expense
 
 # --- 4. 介面呈現 ---
 with st.sidebar:
-    st.title("⚙️ 控制面板")
+    st.title("⚙️ 管理選單")
     if st.button("🔓 安全登出系統", type="primary"):
         st.session_state.auth = False
         st.rerun()
     st.divider()
-    st.metric("本月結餘", f"${balance:,
+    # 修正後的金額顯示行
+    st.metric("本月結餘", f"${int(balance):,}", delta=f"{int(balance):+,}")
+    st.info(f"📅 目前時間：{tw_now.strftime('%H:%M')}")
+
+tab1, tab2, tab3 = st.tabs(["➕ 新增帳目", "📊 財務分析", "📜 歷史編輯"])
+
+# --- Tab 1: 新增帳目 ---
+with tab1:
+    st.subheader("📝 快速記帳")
+    existing_categories = sorted(df['類別'].unique().tolist()) if not df.empty else ["客戶交際", "油錢/交通"]
+    with st.form("ledger_form", clear_on_submit=True):
+        f1, f2 = st.columns(2)
+        date_in = f1.date_input("日期", tw_now.date())
+        type_choice = f2.selectbox("選擇既有類別", ["直接手動輸入"] + existing_categories)
+        manual_type = st.text_input("手動輸入新類別")
+        final_type = manual_type if type_choice == "直接手動輸入" else type_choice
+        
+        f3, f4 = st.columns(2)
+        side_in = f3.radio("收支方向", ["支出", "收入"], horizontal=True)
+        amt_in = f4.number_input("金額", min_value=0, step=1)
+        note_in = st.text_input("項目內容描述")
+        
+        if st.form_submit_button("確認存檔"):
+            if amt_in > 0 and final_type:
+                new_row = pd.DataFrame([{"日期": date_in, "類別": final_type.strip(), "項目內容": note_in, "收支": side_in, "金額": amt_in}])
+                save_data(pd.concat([df, new_row], ignore_index=True))
+                st.success("✅ 已記錄！")
+                st.rerun()
+
+# --- Tab 2: 財務分析 (類別加總) ---
+with tab2:
+    st.subheader(f"📅 {current_month} 類別統計")
+    c1, c2 = st.columns(2)
+    c1.metric("本月總收入", f"${int(income):,}")
+    c2.metric("本月總支出", f"${int(expense):,}")
+    st.divider()
+    
+    # 支出排行
+    exp_only = month_df[month_df['收支'] == "支出"]
+    if not exp_only.empty:
+        st.write("### 🔴 支出類別加總")
+        cat_sum = exp_only.groupby("類別")["金額"].sum().sort_values(ascending=False).reset_index()
+        for _, r in cat_sum.iterrows():
+            st.write(f"🔹 {r['類別']}: `${int(r['金額']):,}`")
+        st.bar_chart(cat_sum.set_index("類別"))
+    
+    # 收入排行
+    inc_only = month_df[month_df['收支'] == "收入"]
+    if not inc_only.empty:
+        st.write("### 🟢 收入類別加總")
+        inc_sum = inc_only.groupby("類別")["金額"].sum().sort_values(ascending=False).reset_index()
+        for _, r in inc_sum.iterrows():
+            st.write(f"🔸 {r['類別']}: `${int(r['金額']):,}`")
+        st.bar_chart(inc_sum.set_index("類別"))
+
+# --- Tab 3: 歷史編輯 (關鍵字搜尋版) ---
+with tab3:
+    st.subheader("📜 歷史紀錄維護")
+    search_query = st.text_input("🔍 搜尋關鍵字 (類別或內容)", "").strip()
+    
+    filtered_df = df.copy()
+    if search_query:
+        filtered_df = df[df['類別'].str.contains(search_query, case=False, na=False) | 
+                         df['項目內容'].str.contains(search_query, case=False, na=False)]
+
+    for i, row in filtered_df.iloc[::-1].head(50).iterrows():
+        label = f"{row['日期']} | {'🔴' if row['收支']=='支出' else '🟢'} {row['類別']} | ${int(row['金額']):,}"
+        with st.expander(label):
+            with st.form(f"edit_{i}"):
+                d = st.date_input("日期", row['日期'], key=f"d{i}")
+                c = st.text_input("類別", row['類別'], key=f"c{i}")
+                s = st.selectbox("收支", ["支出", "收入"], index=0 if row['收支']=="支出" else 1, key=f"s{i}")
+                a = st.number_input("金額", value=int(row['金額']), key=f"a{i}")
+                n = st.text_input("內容", row['項目內容'], key=f"n{i}")
+                
+                b1, b2 = st.columns(2)
+                if b1.form_submit_button("💾 儲存"):
+                    df.loc[i] = [d, c, n, s, a]
+                    save_data(df)
+                    st.rerun()
+                if b2.form_submit_button("🗑️ 刪除"):
+                    save_data(df.drop(i))
+                    st.rerun()

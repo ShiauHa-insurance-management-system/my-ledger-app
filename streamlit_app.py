@@ -24,6 +24,7 @@ st.markdown("""
 
 DB_LEDGER = "my_ledger.csv"
 
+# 初始化資料庫
 if not os.path.exists(DB_LEDGER):
     df_empty = pd.DataFrame(columns=["日期", "類別", "項目內容", "收支", "金額"])
     df_empty.to_csv(DB_LEDGER, index=False)
@@ -61,18 +62,33 @@ df_calc = df.copy()
 df_calc['日期格式'] = pd.to_datetime(df_calc['日期'])
 df_calc['月份'] = df_calc['日期格式'].dt.strftime("%Y-%m")
 
-# 本月資料
 month_df = df_calc[df_calc['月份'] == current_month_str]
 month_income = month_df[month_df['收支'] == "收入"]['金額'].sum()
 month_expense = month_df[month_df['收支'] == "支出"]['金額'].sum()
 month_balance = month_income - month_expense
 
-# --- 5. 介面呈現 ---
+# --- 5. 介面呈現 (側邊欄加強下載按鈕) ---
 with st.sidebar:
     st.title("⚙️ 管理選單")
     if st.button("🔓 安全登出系統", type="primary"):
         st.session_state.auth = False
         st.rerun()
+    
+    # --- 新增的下載備份按鈕 ---
+    st.divider()
+    st.subheader("📥 資料備份 (防消失)")
+    if os.path.exists(DB_LEDGER) and not df.empty:
+        with open(DB_LEDGER, "rb") as file:
+            st.download_button(
+                label="💾 下載所有帳目備份 (CSV)",
+                data=file,
+                file_name=f"ledger_backup_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+            )
+        st.caption("建議定期下載存手機，萬一雲端資料重置可供恢復。")
+    else:
+        st.caption("目前尚無資料可供備份")
+    
     st.divider()
     st.metric("本月結餘", f"${int(month_balance):,}", delta=f"{int(month_balance):+,}")
     st.info(f"📅 目前時間：{tw_now.strftime('%H:%M')}")
@@ -102,53 +118,35 @@ with tab1:
                 st.success("✅ 已記錄！")
                 st.rerun()
 
-# --- Tab 2: 財務分析 (更新重點區) ---
+# --- Tab 2: 財務分析 ---
 with tab2:
-    # 第一大區域：每月收支概況
     st.markdown("### 📅 1. 每月收支概況")
     st.caption(f"統計月份：{current_month_str}")
     c1, c2 = st.columns(2)
     c1.metric("本月總收入", f"${int(month_income):,}")
     c2.metric("本月總支出", f"${int(month_expense):,}")
-    
-    # 本月收支對比圖
     summary_data = pd.DataFrame({"項目": ["收入", "支出"], "金額": [month_income, month_expense]})
     st.bar_chart(summary_data.set_index("項目"))
-    
     st.divider()
-    
-    # 第二大區域：各類別總金額 (不分月份)
-    st.markdown("### 🏆 2. 各類別累計總額 (歷史總計)")
-    st.caption("此區域統計自開帳以來的所有類別加總，不限月份")
-    
+    st.markdown("### 🏆 2. 各類別累計總額")
     col_exp, col_inc = st.columns(2)
-    
     with col_exp:
         st.write("#### 🔴 累計支出排行")
         all_exp = df[df['收支'] == "支出"]
         if not all_exp.empty:
             cat_exp_total = all_exp.groupby("類別")["金額"].sum().sort_values(ascending=False).reset_index()
-            for _, r in cat_exp_total.iterrows():
-                st.write(f"🔹 {r['類別']}: `${int(r['金額']):,}`")
             st.bar_chart(cat_exp_total.set_index("類別"))
-        else:
-            st.info("尚無支出紀錄")
-
     with col_inc:
         st.write("#### 🟢 累計收入排行")
         all_inc = df[df['收支'] == "收入"]
         if not all_inc.empty:
             cat_inc_total = all_inc.groupby("類別")["金額"].sum().sort_values(ascending=False).reset_index()
-            for _, r in cat_inc_total.iterrows():
-                st.write(f"🔸 {r['類別']}: `${int(r['金額']):,}`")
             st.bar_chart(cat_inc_total.set_index("類別"))
-        else:
-            st.info("尚無收入紀錄")
 
 # --- Tab 3: 歷史編輯 ---
 with tab3:
     st.subheader("📜 歷史紀錄維護")
-    search_query = st.text_input("🔍 搜尋關鍵字 (類別或內容)", "").strip()
+    search_query = st.text_input("🔍 搜尋關鍵字", "").strip()
     filtered_df = df.copy()
     if search_query:
         filtered_df = df[df['類別'].str.contains(search_query, case=False, na=False) | 
